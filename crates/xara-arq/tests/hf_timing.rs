@@ -89,7 +89,7 @@ fn adaptive_margin_matches_vara() {
             }
             let f = &e["after"];
             let ctx = format!("{} event {i} {}", s["name"], e["ev"]);
-            let close = |x: f64, k: &str| (x - f[k].as_f64().unwrap()).abs() < 2e-5;
+            let close = |x: f64, k: &str| x == f[k].as_f64().unwrap();
             assert!(
                 close(a.margin, "A") && close(a.margin_decay, "decay") && close(a.margin_prev, "A_prev"),
                 "{ctx}: {a:?} vs {f}"
