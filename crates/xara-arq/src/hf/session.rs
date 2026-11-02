@@ -855,12 +855,13 @@ impl Session {
         (self.level, self.prev_level, self.upstep_from, self.carry.rx_level) = (q, q, q, q);
         self.fallback.clear();
         let reply = connect_reply(self.bw, q.get() as u32);
-        if self.state == State::Listen {
+        let first = self.state == State::Listen;
+        if first {
             self.core.host(HostEvent::Pending);
             self.state = State::Answering;
             self.feed_watchdog(now);
         }
-        self.send_ctrl(reply, Fmt::F1, if self.cfg.host.chat { 0 } else { ANSWER_EXTRA_LEAD });
+        self.send_ctrl(reply, Fmt::F1, if first && !self.cfg.host.chat { ANSWER_EXTRA_LEAD } else { 0 });
         self.announce();
     }
 
