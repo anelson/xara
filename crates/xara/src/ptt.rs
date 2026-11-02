@@ -263,6 +263,7 @@ pub struct PttTiming {
     pub tail: Duration,
     pub max_on: Duration,
     pub stall: Duration,
+    pub give_up: Duration,
 }
 
 impl Default for PttTiming {
@@ -272,6 +273,7 @@ impl Default for PttTiming {
             tail: Duration::from_millis(100),
             max_on: Duration::from_secs(30),
             stall: Duration::from_millis(500),
+            give_up: Duration::from_secs(10),
         }
     }
 }
@@ -332,11 +334,15 @@ fn guard_panics(shutdown: Arc<AtomicBool>, released: Arc<AtomicBool>) -> u64 {
     id
 }
 
+const RETRY_FIRST: Duration = Duration::from_millis(100);
+const RETRY_MAX: Duration = Duration::from_secs(1);
+
 pub enum Event {
     On,
     Off,
     Watchdog,
     Stalled,
+    Fault(String),
 }
 
 pub struct PttCtl {
@@ -396,6 +402,7 @@ impl PttCtl {
             let m = match e {
                 Event::Watchdog => format!("PTT watchdog: keyed longer than {:?}, released", timing.max_on),
                 Event::Stalled => "PTT released: audio loop stalled".into(),
+                Event::Fault(m) => m,
                 _ => return,
             };
             let _ = ltx.send(m);
@@ -426,9 +433,10 @@ impl PttCtl {
         let thread = spawn("ptt", move || {
             PTT_THREAD.set(true);
             let mut k = Keyer { dev, keyed: false, released };
-            let (mut want, mut tripped, mut stalled) = (false, false, false);
+            let (mut want, mut tripped, mut stalled, mut failed) = (false, false, false, false);
             let (mut off_at, mut on_since, mut last) = (None::<Instant>, Instant::now(), Instant::now());
-            let mut fault = None;
+            let (mut retry_at, mut backoff) = (None::<Instant>, RETRY_FIRST);
+            let (mut unsure, mut announced, mut gave_up) = (None::<Instant>, false, false);
             loop {
                 let msg = match k.keyed {
                     true => rx.recv_timeout(Duration::from_millis(2)),
@@ -442,6 +450,8 @@ impl PttCtl {
                             want = w;
                             off_at = (!w && k.keyed).then(|| last + t.tail);
                             tripped &= w;
+                            failed &= w;
+                            failed |= w && unsure.is_some();
                         }
                     }
                     Err(RecvTimeoutError::Timeout) => {}
@@ -451,20 +461,48 @@ impl PttCtl {
                     break;
                 }
                 let now = Instant::now();
+                if unsure.is_some_and(|since| now - since >= t.give_up) {
+                    log(Event::Fault(format!(
+                        "PTT {} would not release for {:?}; giving up",
+                        k.dev.describe(),
+                        t.give_up
+                    )));
+                    gave_up = true;
+                    break;
+                }
                 let stall = k.keyed && !stalled && now - last > t.stall;
-                let trip = k.keyed && !tripped && now - on_since > t.max_on;
+                let trip = k.keyed && unsure.is_none() && !tripped && now - on_since > t.max_on;
                 stalled |= stall;
                 tripped |= trip;
-                forced_off.store(tripped || stalled, Ordering::SeqCst);
-                let target = !tripped && !stalled && (want || off_at.is_some_and(|o| now < o));
-                let change = target != k.keyed;
+                forced_off.store(tripped || stalled || failed, Ordering::SeqCst);
+                let target = !tripped && !stalled && !failed && (want || off_at.is_some_and(|o| now < o));
+                let mut change = target != k.keyed && retry_at.is_none_or(|r| now >= r);
                 if change {
-                    if let Err(e) = k.set(target) {
-                        fault = Some(e);
-                        break;
-                    }
-                    if k.keyed {
-                        on_since = now;
+                    match k.set(target) {
+                        Ok(()) => {
+                            retry_at = None;
+                            backoff = RETRY_FIRST;
+                            unsure = None;
+                            if k.keyed {
+                                on_since = now;
+                            }
+                        }
+                        Err(e) => {
+                            change = false;
+                            failed |= target;
+                            if !target {
+                                unsure.get_or_insert(now);
+                                failed |= want;
+                                retry_at = Some(Instant::now() + backoff);
+                                backoff = (backoff * 2).min(RETRY_MAX);
+                            }
+                            let next = if target {
+                                "releasing it; the rest of this over stays off the air"
+                            } else {
+                                "asking again"
+                            };
+                            log(Event::Fault(format!("PTT {} failed: {e}; {next}", k.dev.describe())));
+                        }
                     }
                 }
                 if stall {
@@ -473,8 +511,12 @@ impl PttCtl {
                 if trip {
                     log(Event::Watchdog);
                 }
-                if change {
-                    log(if k.keyed { Event::On } else { Event::Off });
+                if change && k.keyed {
+                    log(Event::On);
+                    announced = true;
+                } else if change && announced {
+                    log(Event::Off);
+                    announced = false;
                 }
             }
             drop(rx);
@@ -484,14 +526,19 @@ impl PttCtl {
             }
             let released = !keyed || k.release();
             k.keyed = false;
-            if keyed {
+            if released && announced {
                 log(Event::Off);
             }
-            let state = if released { "released" } else { "COULD NOT RELEASE PTT" };
-            match fault {
-                Some(e) => Err(io::Error::new(e.kind(), format!("PTT {} failed: {e}; {state}", k.dev.describe()))),
-                None if !released => Err(io::Error::other(format!("COULD NOT RELEASE PTT on {}", k.dev.describe()))),
-                None => Ok(()),
+            if released && gave_up {
+                Err(io::Error::other(format!(
+                    "PTT {} would not release for {:?}; released at last",
+                    k.dev.describe(),
+                    t.give_up
+                )))
+            } else if released {
+                Ok(())
+            } else {
+                Err(io::Error::other(format!("COULD NOT RELEASE PTT on {}", k.dev.describe())))
             }
         });
         Self { tx: Some(tx), thread: Some(thread), shutdown, forced, watch: None }

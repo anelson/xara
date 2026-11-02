@@ -179,7 +179,9 @@ along with KISS for applications such as Pat. See the README for full details.
 
 **1**
 
-:   PTT error (including failed release), or audio, device or port error.
+:   PTT that would not release after 10 s of retries, a sound device stalled
+    for about 30 s, or another audio, device or port error. A single failed
+    PTT command or a short stall is logged and does not end xara.
 
 **2**
 

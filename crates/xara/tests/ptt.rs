@@ -198,6 +198,7 @@ fn ctl(t: PttTiming) -> (PttCtl, Rec, Arc<Mutex<Vec<&'static str>>>) {
             Event::Off => "off",
             Event::Watchdog => "watchdog",
             Event::Stalled => "stalled",
+            Event::Fault(_) => "fault",
         })
     });
     (c, rec, ev)
@@ -237,6 +238,7 @@ const T: PttTiming = PttTiming {
     tail: Duration::from_millis(80),
     max_on: Duration::from_secs(5),
     stall: Duration::from_millis(300),
+    give_up: Duration::from_secs(10),
 };
 
 #[test]
@@ -406,20 +408,101 @@ impl Ptt for Flaky {
     }
 }
 
-#[test]
-fn ptt_fault_is_returned_after_release() {
-    let rec = Rec::default();
-    let mut c = PttCtl::spawn_with(Box::new(Flaky(rec.clone())), T, Arc::default(), |_| {});
-    let t0 = Instant::now();
-    let e = loop {
-        if let Err(e) = c.set(true) {
-            break e;
+fn faults() -> (Arc<Mutex<Vec<String>>>, impl FnMut(Event) + Send + 'static) {
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let s = said.clone();
+    (said, move |e| {
+        if let Event::Fault(m) = e {
+            s.lock().unwrap().push(m);
         }
-        assert!(t0.elapsed() < Duration::from_secs(1));
-        thread::sleep(Duration::from_millis(5));
-    };
-    assert!(e.to_string().contains("PTT flaky failed: line stuck; released"), "{e}");
-    assert_eq!(states(&rec), [true, false]);
+    })
+}
+
+#[test]
+fn a_failed_key_down_is_released_and_the_modem_goes_on() {
+    let rec = Rec::default();
+    let (said, log) = faults();
+    let mut c = PttCtl::spawn_with(Box::new(Flaky(rec.clone())), T, Arc::default(), log);
+    feed_until(&mut c, true, |_| states(&rec).len() >= 2);
+    feed(&mut c, true, 150);
+    assert_eq!(states(&rec), [true, false], "released, and not keyed again in the same over");
+    assert!(c.forced_off(), "the rest of the over is off the air");
+    assert!(said.lock().unwrap().iter().any(|m| m.contains("flaky") && m.contains("line stuck")), "{said:?}");
+    feed_until(&mut c, false, |c| !c.forced_off());
+    feed_until(&mut c, true, |_| states(&rec).len() >= 4);
+    assert_eq!(states(&rec), [true, false, true, false], "the next over tries again");
+    assert!(c.finish().is_ok());
+}
+
+struct Sticky {
+    rec: Rec,
+    fails: usize,
+}
+
+impl Ptt for Sticky {
+    fn set(&mut self, on: bool) -> io::Result<()> {
+        self.rec.set(on)?;
+        if !on && self.fails > 0 {
+            self.fails -= 1;
+            return Err(io::Error::other("no answer"));
+        }
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        "sticky".into()
+    }
+}
+
+#[test]
+fn a_failed_unkey_is_tried_again_until_it_takes() {
+    let rec = Rec::default();
+    let (said, log) = faults();
+    let mut c = PttCtl::spawn_with(Box::new(Sticky { rec: rec.clone(), fails: 3 }), T, Arc::default(), log);
+    feed_until(&mut c, true, |_| !states(&rec).is_empty());
+    feed_until(&mut c, false, |_| states(&rec).len() >= 5);
+    feed(&mut c, false, 300);
+    assert_eq!(states(&rec), [true, false, false, false, false], "asked until it took, then left alone");
+    let at: Vec<Instant> = rec.0.lock().unwrap().iter().map(|e| e.0).collect();
+    let span = at[4] - at[1];
+    assert!(span >= Duration::from_millis(300) && span < Duration::from_secs(3), "retries are paced: {span:?}");
+    assert_eq!(said.lock().unwrap().len(), 3, "{said:?}");
+    assert!(c.finish().is_ok());
+}
+
+#[test]
+fn a_rigctld_slower_than_its_timeout_does_not_end_xara() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let slow = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (log2, slow2) = (log.clone(), slow.clone());
+    thread::spawn(move || {
+        for s in l.incoming() {
+            let (s, log, slow) = (s.unwrap(), log2.clone(), slow2.clone());
+            thread::spawn(move || {
+                let mut w = s.try_clone().unwrap();
+                for line in BufReader::new(s).lines() {
+                    let Ok(line) = line else { break };
+                    log.lock().unwrap().push(line.clone());
+                    if line == "T 1" && slow.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(1500));
+                    }
+                    if w.write_all(b"RPRT 0\n").is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    let (said, flog) = faults();
+    let mut c = PttCtl::spawn_with(Box::new(Rigctld::open(&addr).unwrap()), T, Arc::default(), flog);
+    feed_until(&mut c, true, |_| log.lock().unwrap().iter().filter(|l| *l == "T 0").count() >= 2);
+    feed(&mut c, false, 200);
+    feed_until(&mut c, true, |_| log.lock().unwrap().iter().filter(|l| *l == "T 1").count() >= 2);
+    feed_until(&mut c, false, |_| log.lock().unwrap().last().is_some_and(|l| l == "T 0"));
+    assert!(!said.lock().unwrap().is_empty(), "the slow answer is reported");
+    assert!(c.finish().is_ok());
 }
 
 #[test]
@@ -733,4 +816,81 @@ fn is_hidraw_accepts_only_hidraw_char_devices() {
     {
         assert!(xara::ptt::is_hidraw(h.path().to_str().unwrap()));
     }
+}
+
+#[test]
+fn an_unconfirmed_unkey_keeps_the_next_over_off_the_air() {
+    let rec = Rec::default();
+    let (_, log) = faults();
+    let mut c = PttCtl::spawn_with(Box::new(Sticky { rec: rec.clone(), fails: 2 }), T, Arc::default(), log);
+    feed_until(&mut c, true, |_| !states(&rec).is_empty());
+    feed_until(&mut c, false, |_| states(&rec).len() >= 2);
+    feed(&mut c, true, 50);
+    assert!(c.forced_off(), "an over that starts before the unkey is confirmed is off the air");
+    feed_until(&mut c, true, |_| states(&rec).len() >= 4);
+    feed(&mut c, true, 150);
+    assert_eq!(states(&rec), [true, false, false, false], "unkey confirmed, and that over never keyed");
+    assert!(c.forced_off(), "the rest of that over stays off the air");
+    feed_until(&mut c, false, |c| !c.forced_off());
+    feed_until(&mut c, true, |_| states(&rec).len() >= 5);
+    assert_eq!(states(&rec), [true, false, false, false, true], "the next over keys");
+    assert!(c.finish().is_ok());
+}
+
+#[test]
+fn an_unkey_that_never_takes_ends_xara() {
+    let rec = Rec::default();
+    let (said, log) = faults();
+    let t = PttTiming { give_up: Duration::from_millis(600), ..T };
+    let mut c = PttCtl::spawn_with(Box::new(Sticky { rec: rec.clone(), fails: usize::MAX }), t, Arc::default(), log);
+    feed_until(&mut c, true, |_| !states(&rec).is_empty());
+    let start = Instant::now();
+    let e = loop {
+        if let Err(e) = c.set(false) {
+            break e;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "never gave up");
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(e.to_string().contains("COULD NOT RELEASE PTT"), "{e}");
+    assert!(start.elapsed() >= Duration::from_millis(600), "gave up after {:?}", start.elapsed());
+    assert!(said.lock().unwrap().len() >= 3, "{said:?}");
+}
+
+#[test]
+fn an_unkey_that_fails_after_a_stall_keeps_the_rest_of_the_over_off() {
+    let rec = Rec::default();
+    let (_, log) = faults();
+    let mut c = PttCtl::spawn_with(Box::new(Sticky { rec: rec.clone(), fails: 3 }), T, Arc::default(), log);
+    feed_until(&mut c, true, |_| !states(&rec).is_empty());
+    wait_until(|| states(&rec).len() >= 2);
+    feed(&mut c, true, 50);
+    assert!(c.forced_off(), "the over goes on with the release unconfirmed");
+    feed_until(&mut c, true, |_| states(&rec).len() >= 5);
+    feed(&mut c, true, 200);
+    assert_eq!(states(&rec), [true, false, false, false, false], "released, and that over never keyed again");
+    assert!(c.forced_off());
+    feed_until(&mut c, false, |c| !c.forced_off());
+    feed_until(&mut c, true, |_| states(&rec).len() >= 6);
+    assert!(c.finish().is_ok());
+}
+
+#[test]
+fn an_unconfirmed_unkey_does_not_trip_the_watchdog() {
+    let rec = Rec::default();
+    let tripped = Arc::new(Mutex::new(0));
+    let t2 = tripped.clone();
+    let t = PttTiming { max_on: Duration::from_millis(200), ..T };
+    let mut c = PttCtl::spawn_with(Box::new(Sticky { rec: rec.clone(), fails: 3 }), t, Arc::default(), move |e| {
+        if matches!(e, Event::Watchdog) {
+            *t2.lock().unwrap() += 1;
+        }
+    });
+    feed_until(&mut c, true, |_| !states(&rec).is_empty());
+    feed(&mut c, true, 50);
+    feed_until(&mut c, false, |_| states(&rec).len() >= 5);
+    feed_until(&mut c, true, |_| states(&rec).len() >= 6);
+    assert_eq!(states(&rec), [true, false, false, false, false, true]);
+    assert_eq!(*tripped.lock().unwrap(), 0, "the watchdog tripped between overs");
+    assert!(c.finish().is_ok());
 }

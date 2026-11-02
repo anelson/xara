@@ -569,6 +569,29 @@ fn serve<M: Modem>(
     Ok(Outcome { drive_db: tnc.station().options().drive_db, restart: tnc.restart_requested(), pumped })
 }
 
+const MAX_STALLS: u32 = 30;
+
+#[derive(Default)]
+struct Stalls(u32);
+
+impl Stalls {
+    fn ride(&mut self, e: std::io::Error) -> std::io::Result<()> {
+        if e.kind() != std::io::ErrorKind::TimedOut || self.0 + 1 >= MAX_STALLS {
+            return Err(e);
+        }
+        self.0 += 1;
+        say!("{e}; carrying on, transmitter off ({} in a row)", self.0);
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        if self.0 > 0 {
+            say!("audio moving again after {} stall(s)", self.0);
+            self.0 = 0;
+        }
+    }
+}
+
 fn pump(
     a: &Args,
     io: &mut dyn Audio,
@@ -604,30 +627,55 @@ fn pump(
     let (mut x, mut out) = (vec![0.0; audio::BLOCK], vec![0.0; audio::BLOCK]);
     let (mut rx, mut sent) = (vec![0i16; audio::BLOCK], vec![0i16; audio::BLOCK]);
     let mut budget = None;
+    let mut stalls = Stalls::default();
+    let (mut held, mut was_keyed) = (false, false);
     let audio = (|| {
         tx.start(io)?;
         while !stop.load(Ordering::SeqCst) {
             let reading = Instant::now();
-            io.read(&mut rx)?;
+            if let Err(e) = io.read(&mut rx) {
+                stalls.ride(e)?;
+                held |= was_keyed;
+                if let Err(e) = ptt.as_mut().map_or(Ok(()), |p| p.set(false)) {
+                    ptt_result = Err(e);
+                    break;
+                }
+                continue;
+            }
             let waited = reading.elapsed();
             let backlog = io.backlog()?;
             behind.tick(backlog);
             x.iter_mut().zip(&rx).for_each(|(v, &s)| *v = audio::sample(s));
-            let forced_off = ptt.as_ref().is_some_and(PttCtl::forced_off);
+            let forced_off = held || ptt.as_ref().is_some_and(PttCtl::forced_off);
             let Tick { keyed, tuning, restart } = process(&x, &mut out, TxState { forced_off, budget: budget.take() });
+            held &= keyed;
+            if held {
+                out.fill(0.0);
+            }
+            let keyed = keyed && !held;
+            was_keyed = keyed;
             if keyed {
                 if let Err(e) = ptt.as_mut().map_or(Ok(()), |p| p.set(true)) {
                     ptt_result = Err(e);
                     break;
                 }
             }
-            let forced = ptt.as_ref().is_some_and(PttCtl::forced_off);
-            budget = tx.send(io, &mut out, forced, waited, backlog)?;
+            let forced = held || ptt.as_ref().is_some_and(PttCtl::forced_off);
+            match tx.send(io, &mut out, forced, waited, backlog) {
+                Ok(b) => {
+                    budget = b;
+                    stalls.clear();
+                }
+                Err(e) => {
+                    stalls.ride(e)?;
+                    held |= keyed;
+                }
+            }
             if let Some(r) = rec.as_deref_mut() {
                 sent.iter_mut().zip(&out).for_each(|(s, &v)| *s = audio::quantize(v));
-                r.push(&rx, &sent, record::ptt(keyed, forced, tuning));
+                r.push(&rx, &sent, record::ptt(keyed && !held, forced || held, tuning));
             }
-            if !keyed {
+            if !keyed || held {
                 if let Err(e) = ptt.as_mut().map_or(Ok(()), |p| p.set(false)) {
                     ptt_result = Err(e);
                     break;
@@ -838,6 +886,136 @@ mod tests {
 
     fn kv(p: &[(&str, &str)]) -> Pairs {
         p.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    struct Stalling {
+        reads: std::collections::VecDeque<std::io::Result<()>>,
+        writes: std::collections::VecDeque<std::io::Result<()>>,
+        stall_forever: bool,
+        written: Vec<i16>,
+    }
+
+    impl Stalling {
+        fn new() -> Self {
+            Self { reads: Default::default(), writes: Default::default(), stall_forever: false, written: Vec::new() }
+        }
+    }
+
+    fn timed_out() -> std::io::Result<()> {
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "capture (no audio): timed out"))
+    }
+
+    impl Audio for Stalling {
+        fn read(&mut self, _: &mut [i16]) -> std::io::Result<()> {
+            if self.stall_forever {
+                return timed_out();
+            }
+            self.reads.pop_front().unwrap_or(Ok(()))
+        }
+
+        fn write(&mut self, x: &[i16]) -> std::io::Result<()> {
+            if x.is_empty() {
+                return Ok(());
+            }
+            let r = self.writes.pop_front().unwrap_or(Ok(()));
+            if r.is_ok() {
+                self.written.push(x[0]);
+            }
+            r
+        }
+
+        fn queued(&mut self) -> std::io::Result<Option<ratematch::Queue>> {
+            Ok(None)
+        }
+
+        fn backlog(&mut self) -> std::io::Result<Option<usize>> {
+            Ok(None)
+        }
+
+        fn path(&mut self) -> std::io::Result<audio::Path> {
+            Ok(audio::Path::default())
+        }
+    }
+
+    fn pumped(io: &mut Stalling, keyed: &[bool], lead: usize) -> (std::io::Result<()>, usize, Vec<bool>) {
+        let a = with_saved(&argv("--call N2CALL --capture c --playback p"), &Pairs::new(), false).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (mut n, halt, mut told) = (0, stop.clone(), Vec::new());
+        let tx = TxPath::new(lead, TxBuffer::default(), audio::Path::default());
+        let p = pump(&a, io, tx, &stop, None, |_, out, state| {
+            told.push(state.forced_off);
+            let k = keyed[n];
+            out.fill(if k { 0.5 } else { 0.0 });
+            n += 1;
+            if n == keyed.len() {
+                halt.store(true, Ordering::SeqCst);
+            }
+            Tick { keyed: k, tuning: false, restart: false }
+        });
+        (p.audio, n, told)
+    }
+
+    #[test]
+    fn a_stalled_capture_is_ridden_out() {
+        let mut io = Stalling::new();
+        io.reads.extend([timed_out(), timed_out()]);
+        let (r, n, _) = pumped(&mut io, &[false; 5], 0);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn a_stall_mid_burst_mutes_the_rest_of_it() {
+        let mut io = Stalling::new();
+        io.writes.extend([Ok(()), timed_out()]);
+        let (r, _, _) = pumped(&mut io, &[true, true, true, false, true], 0);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(io.written, [16384, 0, 0, 16384]);
+    }
+
+    #[test]
+    fn a_read_stall_mid_burst_mutes_the_rest_of_it_and_says_so() {
+        let mut io = Stalling::new();
+        io.reads.extend([Ok(()), timed_out()]);
+        let (r, _, told) = pumped(&mut io, &[true, true, true, false, true], 0);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(io.written, [16384, 0, 0, 0, 16384]);
+        assert_eq!(told, [false, true, true, true, false], "the modem is told the rest of the over is off the air");
+    }
+
+    #[test]
+    fn a_stall_mid_burst_drops_what_the_ptt_lead_still_held() {
+        let mut io = Stalling::new();
+        io.writes.extend([Ok(()), timed_out()]);
+        let (r, _, _) = pumped(&mut io, &[true, true, true, true, false, false, true], audio::BLOCK / 2);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(io.written[1..], [0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_write_stall_mid_burst_says_so() {
+        let mut io = Stalling::new();
+        io.writes.extend([Ok(()), timed_out()]);
+        let (_, _, told) = pumped(&mut io, &[true, true, true, false, true], 0);
+        assert_eq!(told, [false, false, true, true, false]);
+    }
+
+    #[test]
+    fn a_stall_that_does_not_end_still_ends_xara() {
+        let mut io = Stalling::new();
+        io.stall_forever = true;
+        let (r, n, _) = pumped(&mut io, &[false; 3], 0);
+        assert_eq!(r.map_err(|e| e.kind()), Err(std::io::ErrorKind::TimedOut));
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn other_audio_errors_end_xara_at_once() {
+        let mut io = Stalling::new();
+        io.reads.push_back(Err(std::io::Error::other("alsa capture: No such device")));
+        let (r, n, _) = pumped(&mut io, &[false; 3], 0);
+        assert!(r.is_err());
+        assert_eq!(n, 0);
     }
 
     #[test]
