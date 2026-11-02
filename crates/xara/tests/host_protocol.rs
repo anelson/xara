@@ -293,7 +293,10 @@ fn one_client_per_port_and_drop_resets() {
     lab.run_until(1.0, |_| false);
     let n = al.lock().unwrap().len();
     let mut probe = [0u8; 1];
-    a.cmd.set_read_timeout(Some(std::time::Duration::from_millis(500))).unwrap();
+    // macOS gives EINVAL here if the modem has already reset the connection
+    if let Err(e) = a.cmd.set_read_timeout(Some(std::time::Duration::from_millis(500))) {
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{e}");
+    }
     assert_eq!(std::io::Read::read(&mut a.cmd.try_clone().unwrap(), &mut probe).unwrap_or(0), 0);
     assert!(lab.run_until(10.0, |l| l.tnc[0].station().state() == State::Listen));
     assert_eq!(al.lock().unwrap().len(), n);
