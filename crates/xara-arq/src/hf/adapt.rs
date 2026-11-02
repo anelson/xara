@@ -6,6 +6,10 @@ use xara_phy::hf::level::{Bandwidth, Level, Record, qam_limit};
 pub const DISABLED: f64 = -100.0;
 pub const SN_NORM_DB: f64 = 9.4;
 
+fn single(x: f64) -> f64 {
+    f64::from(x as f32)
+}
+
 pub fn step_thr(l: &Level) -> f64 {
     dec1(l.snr_thr_db) - (SN_NORM_DB - dec1(l.papr_db))
 }
@@ -75,7 +79,7 @@ impl Adaptation {
     }
 
     pub fn reset(&mut self) {
-        (self.margin, self.margin_decay, self.margin_prev) = (2.0, 0.5 / 15.0, 0.0);
+        (self.margin, self.margin_decay, self.margin_prev) = (2.0, single(0.5 / 15.0), 0.0);
         (self.ok_run, self.qam, self.last, self.failed_climbs, self.last_good) =
             (1, Qam::None, Record::ONE, 0, Record::ONE);
     }
@@ -85,7 +89,7 @@ impl Adaptation {
         if self.bw.level(level).is_qam() {
             self.qam = Qam::Received;
         }
-        self.margin = (self.margin - self.margin_decay).max(1.5);
+        self.margin = single(self.margin - self.margin_decay).max(1.5);
         self.last_good = level;
         if self.last < level {
             self.failed_climbs = 0;
@@ -99,14 +103,14 @@ impl Adaptation {
                 self.qam = Qam::LostFirst;
             }
             self.margin_prev = self.margin;
-            self.margin += 1.0;
+            self.margin = single(self.margin + 1.0);
             if self.last < level {
-                self.margin += 4.0 * f64::from(self.failed_climbs);
+                self.margin = single(self.margin + 4.0 * f64::from(self.failed_climbs));
             }
             if self.ok_run < 15 {
-                self.margin += 3.0 * f64::from(15 - self.ok_run) / 15.0;
+                self.margin = single(self.margin + 3.0 * f64::from(15 - self.ok_run) / 15.0);
             }
-            self.margin_decay = (self.margin - self.margin_prev) / 15.0;
+            self.margin_decay = single((self.margin - self.margin_prev) / 15.0);
         }
         self.ok_run = 0;
         if self.last < level {
@@ -124,7 +128,7 @@ impl Adaptation {
                     || (d >= 2 && (self.failed_climbs != 0 || l > lim))
                     || (d == 1 && l > lim && self.qam == Qam::LostFirst)) =>
             {
-                snr_db - step_thr(self.bw.level(l)) - self.margin - d.saturating_sub(1) as f64
+                single(snr_db) - single(step_thr(self.bw.level(l))) - self.margin - d.saturating_sub(1) as f64
             }
             _ => DISABLED,
         })
