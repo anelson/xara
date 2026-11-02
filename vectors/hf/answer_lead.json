@@ -1,0 +1,10 @@
+{
+ "answers": [
+  {"bw": 500, "answer": "first", "symbols": 23, "seen": 48},
+  {"bw": 500, "answer": "repeat", "symbols": 16, "seen": 28},
+  {"bw": 2300, "answer": "first", "symbols": 23, "seen": 46},
+  {"bw": 2300, "answer": "repeat", "symbols": 16, "seen": 28},
+  {"bw": 2750, "answer": "first", "symbols": 23, "seen": 47},
+  {"bw": 2750, "answer": "repeat", "symbols": 16, "seen": 28}
+ ]
+}

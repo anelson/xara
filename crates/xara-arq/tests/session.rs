@@ -1,9 +1,13 @@
+mod common;
+
 use xara_arq::compression::Compression;
 use xara_arq::hf::frames::parse;
 use xara_arq::hf::session::{Config, CtrlIn, DataIn, FrameIn, Output, Session, State, Tx};
 use xara_arq::host::HostEvent;
 use xara_arq::time::{SECOND, Time};
-use xara_phy::hf::ctrl::Fmt;
+use xara_phy::call::call_hash;
+use xara_phy::hf::ctrl::code::connect_req;
+use xara_phy::hf::ctrl::{Codebook, Fmt, Role, leadin_symbols};
 use xara_phy::hf::frame::term_marker;
 use xara_phy::hf::level::{Bandwidth, Record};
 
@@ -176,6 +180,37 @@ fn bulk_transfer_end_and_disconnect_follow_text_2300_chatoff() {
     sim.none();
     assert_eq!(sim.host.last(), Some(&HostEvent::Disconnected));
     assert_eq!(sim.s.state(), State::Listen);
+}
+
+#[test]
+fn only_the_first_answer_to_a_call_has_the_extra_lead() {
+    let mut sim =
+        Sim { s: Session::new(Config::new(Bandwidth::Hz2300, "N1CALL")), now: 0, host: Vec::new(), txq: Vec::new() };
+    sim.ctrl(connect_req(Bandwidth::Hz2300, 0), 0);
+    let Tx::Ctrl { fmt: Fmt::F1, extra, code } = sim.tx() else { panic!("an answer") };
+    assert_eq!(extra, 7, "the first answer");
+    assert_eq!(sim.s.state(), State::Answering);
+    sim.ctrl(connect_req(Bandwidth::Hz2300, 0), 0);
+    assert_eq!(sim.tx(), Tx::Ctrl { code, fmt: Fmt::F1, extra: 0 }, "the answer to a repeated call");
+}
+
+#[test]
+fn answers_are_as_long_as_varas() {
+    let v = common::json("hf/answer_lead.json");
+    for a in v["answers"].as_array().unwrap() {
+        let bw = common::bw(&a["bw"]);
+        let mut sim = Sim { s: Session::new(Config::new(bw, "N1CALL")), now: 0, host: Vec::new(), txq: Vec::new() };
+        let calls = if a["answer"] == "first" { 1 } else { 3 };
+        let mut answer = None;
+        for _ in 0..calls {
+            sim.ctrl(connect_req(bw, 0), 0);
+            answer = Some(sim.tx());
+        }
+        let Some(Tx::Ctrl { code, fmt, extra }) = answer else { panic!("{bw:?}: no answer") };
+        let cb = Codebook::new(call_hash(b"N1CALL"), [call_hash(b"N0CALL"), 0, 0, 0, 0], Role::Answerer, bw);
+        let symbols = leadin_symbols(fmt, code, extra) as usize + cb.tx(fmt, code).len();
+        assert_eq!(symbols as i64, a["symbols"].as_i64().unwrap(), "{bw:?} {} answer", a["answer"]);
+    }
 }
 
 #[test]

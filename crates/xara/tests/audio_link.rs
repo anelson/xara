@@ -153,6 +153,15 @@ fn median_gap(air: &Air, from: usize, to: usize) -> f64 {
 }
 
 #[test]
+fn a_slow_answering_station_still_links() {
+    for bw in [Bandwidth::Hz500, Bandwidth::Hz2300, Bandwidth::Hz2750] {
+        let lead = Lead { ms: [0, 300], lag: [0, 0], told: false };
+        let r = session_led(bw, true, 0.002, payload(2000, 77), payload(500, 77), Compression::Text, lead);
+        assert!(r.is_ok(), "{bw:?}: an answerer 300 ms late did not link: {:?}", r.err());
+    }
+}
+
+#[test]
 fn capture_lag_is_absorbed() {
     let run = |lag, told| {
         let lead = Lead { ms: [0, 0], lag, told };
