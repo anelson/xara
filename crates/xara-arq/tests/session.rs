@@ -397,3 +397,28 @@ fn compressed_frame_with_a_lost_frame_2_is_still_expanded() {
         .collect();
     assert_eq!(rx, &b"[WL2K-5.0-B2FWIHJM$]\r"[..e.consumed]);
 }
+
+#[test]
+fn a_reply_deadline_waits_for_what_was_heard() {
+    let mut sim = Sim::caller();
+    sim.s.connect(0, None, "N1CALL");
+    assert_eq!(sim.tx(), Tx::Ctrl { code: 26, fmt: Fmt::F0, extra: 9 });
+    let deadline = sim.s.next_deadline().expect("a reply deadline after the call");
+    sim.s.poll_heard(deadline + SECOND, deadline - 1);
+    sim.none();
+    assert_eq!(sim.s.state(), State::Calling);
+    sim.s.poll_heard(deadline + SECOND, deadline);
+    assert_eq!(sim.tx(), Tx::Ctrl { code: 26, fmt: Fmt::F0, extra: 0 }, "the call is repeated");
+}
+
+#[test]
+fn the_watchdog_keeps_to_the_clock_while_the_receiver_lags() {
+    let mut sim = Sim::caller();
+    sim.s.connect(0, None, "N1CALL");
+    assert_eq!(sim.tx(), Tx::Ctrl { code: 26, fmt: Fmt::F0, extra: 9 });
+    sim.s.poll_heard(sim.now + 600 * SECOND, 0);
+    let sent = sim.drain();
+    assert!(!sent.iter().any(|t| matches!(t, Tx::Ctrl { .. })), "called again: {sent:?}");
+    assert!(matches!(sim.host[..], [.., HostEvent::TimedOut]), "{:?}", sim.host);
+    assert_ne!(sim.s.state(), State::Calling);
+}

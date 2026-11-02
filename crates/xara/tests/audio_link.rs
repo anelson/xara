@@ -133,7 +133,7 @@ fn compressed_sessions_over_audio() {
 
 #[test]
 fn ptt_lead_is_absorbed() {
-    for ms in [[300, 0], [500, 0], [0, 100], [100, 100]] {
+    for ms in [[450, 0], [500, 0], [350, 100], [450, 130]] {
         let led = |told| {
             let lead = Lead { ms, lag: [0, 0], told };
             session_led(Bandwidth::Hz2300, true, 0.002, payload(8000, 77), payload(1500, 77), Compression::Text, lead)

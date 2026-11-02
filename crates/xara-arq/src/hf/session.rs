@@ -699,6 +699,10 @@ impl Session {
     }
 
     pub fn poll(&mut self, now: Time) {
+        self.poll_heard(now, now);
+    }
+
+    pub fn poll_heard(&mut self, now: Time, heard: Time) {
         if self.core.transmitting {
             return;
         }
@@ -724,7 +728,7 @@ impl Session {
             }
             return;
         }
-        if !self.link.deadline_fired(now) {
+        if !self.link.deadline_fired(heard.min(now)) {
             return;
         }
         if matches!(self.state, State::HeaderSent | State::Sending | State::Break | State::IdleSent)

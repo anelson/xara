@@ -123,6 +123,10 @@ impl<X: Copy> Hold<X> {
         self.best.take_if(|b| pos - b.0 > self.hold)
     }
 
+    pub fn held(&self) -> Option<i64> {
+        self.best.map(|b| b.0)
+    }
+
     pub fn retain(&mut self, f: impl FnOnce(&mut X) -> bool) {
         self.best.take_if(|b| !f(&mut b.2));
     }

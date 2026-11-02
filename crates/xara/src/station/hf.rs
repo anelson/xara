@@ -470,7 +470,8 @@ impl Modem for Station {
             self.on_unproto_event(ev);
         }
         if self.c.session.next_deadline().is_some_and(|d| d <= self.c.now) {
-            self.c.session.poll(self.c.now);
+            let heard = self.rx_base + self.rx.heard_through48();
+            self.c.session.poll_heard(self.c.now, heard);
         }
         self.drain();
         self.poll_unproto();

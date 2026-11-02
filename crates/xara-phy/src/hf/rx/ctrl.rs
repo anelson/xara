@@ -191,6 +191,16 @@ impl CtrlDetector {
         self.search_next = [None; 3];
     }
 
+    pub fn settled(&self) -> Option<i64> {
+        (0..3)
+            .filter(|&f| !self.tabs[f].entries.is_empty())
+            .filter_map(|f| {
+                let row = self.holds[f].held().or(self.search_next[f])?;
+                Some((row - 1) * HOP + NS as i64)
+            })
+            .min()
+    }
+
     fn score(&self, f: Fmt, j: i64, offset: i64, e: &Entry) -> (f64, usize, f64) {
         score(&self.stft.spec, &self.tabs[f.index()], j, offset, e)
     }

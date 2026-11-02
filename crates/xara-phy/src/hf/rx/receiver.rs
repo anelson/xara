@@ -279,6 +279,11 @@ impl Receiver {
         }
     }
 
+    pub fn heard_through48(&self) -> i64 {
+        let end = self.buf.end();
+        to48(self.ctrl.as_ref().and_then(CtrlDetector::settled).map_or(end, |t| t.min(end)))
+    }
+
     pub fn mute(&mut self, a48: i64, b48: i64) {
         self.muted.mute(&self.buf, FS3, a48 / DEC, b48 / DEC);
     }

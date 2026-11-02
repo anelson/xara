@@ -89,7 +89,9 @@ fn second_call_at<M: Modem>(mut st: M) -> usize {
 fn the_reply_window_opens_when_the_ptt_tail_ends() {
     let opts = |ptt_tail| Options { ptt_tail, ..Options::default() };
     let hf = |t| Station::new(Config::new(Bandwidth::Hz2300, "N0CALL"), opts(t));
-    assert_eq!(second_call_at(hf(4800)) - second_call_at(hf(0)), 4800);
+    let row = xara_phy::hf::rx::ctrl::HOP * xara_phy::hf::rx::DEC;
+    let moved = second_call_at(hf(4800)) as i64 - second_call_at(hf(0)) as i64;
+    assert!((4800 - row..=4800 + row).contains(&moved), "moved {moved}");
     let fm = |t| FmStation::new(xara_arq::fm::Config::new(FmBandwidth::Narrow, "N0CALL"), opts(t));
     assert_eq!(second_call_at(fm(4800)) - second_call_at(fm(0)), 4800);
 }

@@ -148,6 +148,47 @@ fn offsets_and_noise() {
 }
 
 #[test]
+fn heard_through_never_passes_an_unreported_frame() {
+    use xara_phy::call::call_hash;
+    use xara_phy::hf::ctrl::{Codebook, Fmt, Role, leadin_grids, leadin_symbols, synth};
+    use xara_phy::hf::rx::ctrl::rx_entries;
+    let mut rng = Rng::new(31);
+    let grids = leadin_grids();
+    for bw in Bandwidth::ALL {
+        let mut cb = Codebook::new(call_hash(b"N1CALL"), [call_hash(b"N2CALL"), 0, 0, 0, 0], Role::Caller, bw);
+        cb.set_connect_codes(call_hash(b"N2CALL"), Role::Caller);
+        let entries = rx_entries(&cb, 0);
+        let mut x = vec![0.0; 24000];
+        for (fmt, code) in [(Fmt::F0, 1), (Fmt::F1, 7), (Fmt::F2, 49), (Fmt::F1, 12)] {
+            let lead = &grids[fmt.index()][..leadin_symbols(fmt, code, 0) as usize];
+            x.extend(normalise(&synth(lead, cb.rx(fmt, code))));
+            x.extend(vec![0.0; 12000 + rng.below(4800) as usize]);
+        }
+        let x: Vec<f64> = x.iter().map(|v| v + 0.02 * rng.gauss()).collect();
+        let mut rx = Receiver::new(bw, &[], 1, Some(&entries));
+        let (mut fed, mut last, mut heard) = (0i64, i64::MIN, Vec::new());
+        let mut through = Vec::new();
+        for b in x.chunks(480) {
+            for e in rx.feed(b) {
+                if let Event::Ctrl(c) = e {
+                    heard.push((c.t_end48(), through.len()));
+                }
+            }
+            fed += b.len() as i64;
+            let h = rx.heard_through48();
+            assert!(h >= last && h <= fed, "{bw:?}: heard through {h} after {last}, {fed} fed");
+            assert!(fed < 4800 || h >= fed - 4800, "{bw:?}: heard through {h} with {fed} fed");
+            last = h;
+            through.push(h);
+        }
+        assert_eq!(heard.len(), 4, "{bw:?}: {heard:?}");
+        for (t_end, at) in heard {
+            assert!(through[..at].iter().all(|&h| h < t_end), "{bw:?}: heard through {t_end} before reporting it");
+        }
+    }
+}
+
+#[test]
 fn control_frames() {
     use xara_phy::call::call_hash;
     use xara_phy::hf::ctrl::{Codebook, Fmt, Role, leadin_grids, leadin_symbols, synth};
