@@ -54,6 +54,17 @@ timestamped details about the observed packets.
 
 :   Only attempt to resolve known calls
 
+**--vara-dir** *DIR*
+
+:   Directory of your own VARA HF 4.9.1 installation, read for the tables of
+    the 2027 waveform. They are not shipped with xara. Experimental.
+
+**--waveform** *auto*|*legacy*|*2027*
+
+:   Waveform keying to decode. *auto* (default) uses the old waveform until
+    2027 and the new one from 2027 if **--vara-dir** is set. *2027* needs
+    **--vara-dir**.
+
 **--key-idle** *MIN*
 
 :   Max target idle time (default: 30, 0 disables)
@@ -99,4 +110,4 @@ closed; 1 on an error; 2 on a bad command line; 130 on a second signal.
 
 **xara**(1), **sox**(1)
 
-README.md in the xara source, https://github.com/x0rro/xara
+README.md and docs/keying.md in the XaraNext source

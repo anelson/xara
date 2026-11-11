@@ -1,6 +1,12 @@
-# xara
+# XaraNext
 
-a VARA-compatible modem for linux, freebsd and macOS. tested against VARA HF 4.9.0 and FM 4.4.0.
+XaraNext 1.0 is a VARA-compatible modem for linux, freebsd and macOS, based
+on xara 0.1.3 by x0rro. tested against VARA HF 4.9.0 and FM 4.4.0. it adds
+experimental support for the waveform VARA HF 4.9.1 uses from 2027, and for
+named keyings of your own (see below).
+
+it is a drop-in replacement: the programs are still called `xara`,
+`xara-monitor` and `xara-keygen`, and config files are unchanged.
 
 ## minimum config
 
@@ -26,14 +32,16 @@ install deps (debian/ubuntu):
 
     apt install libpulse-dev libasound2-dev
 
-then install from here:
+then install from here (`xara`, `xara-monitor` and `xara-keygen`):
 
-    cargo install --locked --git https://github.com/x0rro/xara xara
+    cargo install --locked --git https://github.com/CowboyPilot/xara xara
 
 alternatively for a local setup you can do:
 
     cargo build --release
     cargo test
+
+other platforms are covered in [BUILDING.md](BUILDING.md).
 
 the systemd, udev and sysusers files and `dist/install.sh` are linux-only.
 
@@ -48,7 +56,7 @@ container on x86_64:
     # TARGET=armv7-unknown-linux-gnueabihf
 
     apt-get update && apt-get install -y --no-install-recommends ca-certificates git
-    git clone -b vVERSION https://github.com/x0rro/xara && cd xara
+    git clone -b vVERSION https://github.com/CowboyPilot/xara && cd xara
     scripts/release_deps.sh $TARGET
     . ~/.cargo/env
     scripts/release_bins.sh $TARGET
@@ -88,6 +96,9 @@ container on x86_64:
 
     --registered            enable registered speeds (must set build flag)
 
+    --vara-dir DIR          your VARA HF 4.9.1 install, for the 2027 waveform
+    --waveform W            auto, legacy or 2027 (default: auto)
+
     --digi CALL             FM digipeat for CALL (default: off)
     --record PATH           record rx, tx and PTT to FLAC (or WAV if .wav)
     --log FILE              append UTC-timestamped output to FILE
@@ -122,6 +133,58 @@ summary of settings:
     --ptt-tail-ms N             PTT held for N ms after xmit (default: 100)
     --ptt-max-s N               release PTT after N sec max (1-120, default: 30)
 
+## VARA HF 4.9.1 and the 2027 waveform
+
+VARA HF 4.9.1 changes its waveform when the PC clock reaches 2027: new
+interleaver and phase tables and a different seed for the control codes.
+stations on the old and new waveform cannot hear each other.
+
+the old tables can be generated, so xara builds them itself. the new ones
+cannot, and xara does not ship them. to use the new waveform, install VARA HF
+4.9.1 yourself and point xara at that directory:
+
+    xara ... --vara-dir "/path/to/VARA"
+
+xara reads `Binary1.dat`, `Binary2.dat`, `Binary3.dat`, `Mod1.dat` and
+`Mod2.dat` from there, checks them, and refuses to start if any is missing or
+damaged. the waveform is chosen once at startup:
+
+ - `--waveform auto`: old waveform until 2027, new from 2027 (same as VARA)
+ - `--waveform legacy`: always the old waveform
+ - `--waveform 2027`: always the new waveform (needs `--vara-dir`)
+
+without `--vara-dir` xara stays on the old waveform and warns from 2027.
+
+`--vara-dir` can also point at a named keying made by `xara-keygen` (below).
+
+`xara-monitor` takes the same two options. use `--waveform legacy` to read
+an old recording after 2027, and `--waveform 2027` to read a new one before.
+
+status: EXPERIMENTAL. this has not yet been tested on air against VARA HF
+4.9.1. FM is not affected by these options. file formats and details are in
+[docs/keying.md](docs/keying.md).
+
+## xara-keygen
+
+`xara-keygen` makes table files for a keying of your own, so a group of
+stations can share a channel and only react to each other. stations hear each
+other only if they loaded the same keying: frames, connect requests and all
+other control codes of any other keying (VARA's included) are ignored.
+
+    xara-keygen --name NAME --out DIR
+
+    --name NAME             name of the keying (A-Z, a-z, 0-9, - _ .)
+    --out DIR               directory to write (must not hold tables already)
+
+then run every station of the group with `--vara-dir DIR`. a named keying is
+used whatever the date; `--waveform legacy` turns it off.
+
+the name is the whole definition: the same name gives the same tables on every
+machine, so publishing the name publishes the waveform. this is NOT
+encryption and gives no privacy. on amateur bands, publish the name you use.
+a named keying cannot talk to VARA or to stations on any other keying. the
+exact generator is specified in [docs/keying.md](docs/keying.md).
+
 ## xara-monitor
 
 `xara-monitor` listens to VARA HF traffic between other stations and never
@@ -143,6 +206,9 @@ options:
     --call CALL             known call (repeatable)
     --calls FILE            list of known calls, one per line
     --no-blind              only attempt to resolve known calls
+
+    --vara-dir DIR          your VARA HF 4.9.1 install, for the 2027 waveform
+    --waveform W            auto, legacy or 2027 (default: auto)
 
     --ui-port N             read-only web UI on port N (default: off)
     --ui-addr ADDR          web UI listen addr (default: 127.0.0.1)

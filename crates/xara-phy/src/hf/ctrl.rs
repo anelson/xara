@@ -208,6 +208,12 @@ pub const fn family_comb(v: u32) -> (u32, u32) {
     }
 }
 
+/// Seed the generator for a control-code family. Every HF control seed goes
+/// through here so the 2027 keying's seed offset applies to all of them.
+fn reseed(r: &mut VbRnd, x: u64) {
+    r.seed_rnd_wide(x + super::seed_bias());
+}
+
 pub fn gen_code(r: &mut VbRnd, fmt: Fmt, v: u32) -> Codeword {
     let (n, off) = family_comb(v);
     let f = fmt.params();
@@ -242,24 +248,24 @@ impl Codebook {
                 let fo = f.index() as u64 + so;
                 let book = &mut codes[u][f.index()];
                 book.push(Vec::new());
-                r.seed_rnd_wide(seed + u64::from(SEED_OFF) + fo);
+                reseed(&mut r, seed + u64::from(SEED_OFF) + fo);
                 for c in 1..=NUM_CODES as u32 {
                     if let Some((b, k)) = code::connect_req_alias(c) {
                         let peer = if u == 1 && k == 0 { seed_value } else { mycall_hashes[k as usize] };
-                        r.seed_rnd_wide(u64::from(peer) + fo + u64::from(req_seed_off(b)));
+                        reseed(&mut r, u64::from(peer) + fo + u64::from(req_seed_off(b)));
                     }
                     match c {
-                        code::CONNECT_REPLY_2750 => r.seed_rnd_wide(seed + u64::from(SEED_OFF_REPLY_2750) + fo),
-                        code::KISS_L2 => r.seed_rnd_wide(0xCD80A4 + fo),
-                        code::CQ => r.seed_rnd_wide(0xA3CE37 + fo),
-                        code::KISS_L4 => r.seed_rnd_wide(0x49E730 + fo),
-                        _ if c == code::start_level_code(1) => r.seed_rnd_wide(seed + u64::from(SEED_OFF_LEVEL) + fo),
+                        code::CONNECT_REPLY_2750 => reseed(&mut r, seed + u64::from(SEED_OFF_REPLY_2750) + fo),
+                        code::KISS_L2 => reseed(&mut r, 0xCD80A4 + fo),
+                        code::CQ => reseed(&mut r, 0xA3CE37 + fo),
+                        code::KISS_L4 => reseed(&mut r, 0x49E730 + fo),
+                        _ if c == code::start_level_code(1) => reseed(&mut r, seed + u64::from(SEED_OFF_LEVEL) + fo),
                         _ => {}
                     }
                     let v = if c == code::KISS_L1 { bw_family(bw) } else { family(c, bw) };
                     book.push(gen_code(&mut r, f, v));
                 }
-                r.seed_rnd_wide(KISS_L1_SEED + fo);
+                reseed(&mut r, KISS_L1_SEED + fo);
                 book[code::KISS_L1 as usize] = gen_code(&mut r, f, family(code::KISS_L1, bw));
             }
         }
@@ -275,7 +281,7 @@ impl Codebook {
         let mut r = VbRnd::new();
         for (u, &so) in side_off.iter().enumerate() {
             for f in Fmt::ALL {
-                r.seed_rnd_wide(f.index() as u64 + u64::from(seed_value) + so);
+                reseed(&mut r, f.index() as u64 + u64::from(seed_value) + so);
                 for c in [code::BREAK, code::IDLE] {
                     self.codes[u][f.index()][c as usize] = gen_code(&mut r, f, family(c, self.bw));
                 }

@@ -327,7 +327,11 @@ pub fn hypotheses(state: u32, fmt: Fmt, v: u32, bw: Bandwidth) -> Vec<Hypothesis
     }
     let f = fmt.index() as u32;
     let mut hs = Vec::new();
+    // Under the 2027 keying every control seed carries a fixed offset; undo it
+    // so the arithmetic below works on the seed the codebook was asked for.
+    let bias = crate::hf::seed_bias() as u32;
     for (k, x) in seed_preimages(&targets) {
+        let Some(x) = x.checked_sub(bias) else { continue };
         let k = k as u32;
         let mut add = |code: u32, sender: Role, key: Option<Key>| {
             if let Some(key) = key {

@@ -1,5 +1,17 @@
 # Changelog
 
+## XaraNext 1.0.0
+
+based on xara 0.1.3. the programs keep their names (`xara`, `xara-monitor`,
+`xara-keygen`).
+
+- experimental: `--vara-dir` and `--waveform` for the waveform VARA HF 4.9.1
+  uses from 2027, with tables read from the user's own VARA install
+  (`xara` and `xara-monitor`)
+- experimental: `xara-keygen` makes named keyings, loaded with `--vara-dir`
+
+# xara history
+
 ## 0.1.3
 
 - macOS / CoreAudio support thanks to NR5P's work in x0rro/xara#19

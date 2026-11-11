@@ -9,7 +9,7 @@ target=$1
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$(mkdir -p "${2:-$root/target/dist}" && cd "${2:-$root/target/dist}" && pwd)
 ver=$(sed -n 's/^version = "\(.*\)"$/\1/p;T;q' "$root/Cargo.toml")
-name=xara-$ver-$target
+name=xaranext-$ver-$target
 mtime=$(git -C "$root" log -1 --format=%ct)
 case $target in
 aarch64-unknown-linux-gnu) cc=aarch64-linux-gnu ;;
@@ -36,6 +36,7 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/$name"
 cp "$root/target/$target/release/xara" "$root/target/$target/release/xara-monitor" \
+    "$root/target/$target/release/xara-keygen" \
     "$root/LICENSE" "$root/README.md" "$stage/$name/"
 cp -r "$root/dist" "$stage/$name/"
 tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner \

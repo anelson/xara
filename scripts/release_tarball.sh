@@ -4,7 +4,7 @@ ref=${1:-HEAD}
 root=$(git rev-parse --show-toplevel)
 out=$(mkdir -p "${2:-$root/target/dist}" && cd "${2:-$root/target/dist}" && pwd)
 ver=$(git -C "$root" show "$ref:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p;T;q')
-name=xara-$ver
+name=xaranext-$ver
 mtime=$(git -C "$root" log -1 --format=%ct "$ref")
 stage=$out/stage
 rm -rf "$stage" && mkdir -p "$stage"

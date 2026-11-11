@@ -1,7 +1,7 @@
 use crate::crc::crc16_genibus;
 use crate::fm::level::{FmBandwidth, Layout, Record};
 use crate::hf::level::{Bandwidth, FSK_PILOTS, Level, Waveform};
-use crate::rnd::VbRnd;
+use crate::rnd::{Draw, VbRnd};
 
 const HF_PP: u32 = crate::hf::ofdm::PILOT_PERIOD;
 const FM_PP: u32 = crate::fm::level::PILOT_PERIOD;
@@ -20,7 +20,7 @@ pub(crate) fn marker_map(other: &[u16], nc: usize, markers: usize, nsym: usize) 
     other[nc * markers..].chunks(nsym).take(nc).map(|r| r.iter().map(|&v| v != 0).collect()).collect()
 }
 
-fn perm(r: &mut VbRnd, n: u32) -> Vec<u32> {
+fn perm(r: &mut impl Draw, n: u32) -> Vec<u32> {
     let mut used = vec![false; n as usize];
     let mut out = Vec::with_capacity(n as usize);
     while out.len() < n as usize {
@@ -32,7 +32,7 @@ fn perm(r: &mut VbRnd, n: u32) -> Vec<u32> {
     out
 }
 
-fn fsk_other(r: &mut VbRnd, l: &Level) -> Vec<u16> {
+fn fsk_other(r: &mut impl Draw, l: &Level) -> Vec<u16> {
     let Waveform::Fsk { symbols: s, first, last, step, .. } = l.waveform else { unreachable!() };
     let nb = last - first + 1;
     let m = if step > 1 { nb / step + 1 } else { nb };
@@ -88,7 +88,7 @@ fn carrier_other(rows: Vec<Vec<u32>>, spf: u32) -> Vec<u16> {
     out
 }
 
-fn psk_other(r: &mut VbRnd, l: &Level) -> Vec<u16> {
+fn psk_other(r: &mut impl Draw, l: &Level) -> Vec<u16> {
     let (spf, first) = match l.waveform {
         Waveform::Ofdm { spf, first, .. } => (spf, first),
         _ => (l.spf(), 0),
@@ -121,13 +121,19 @@ fn fm_other(r: &mut VbRnd, f: &Layout) -> Vec<u16> {
 }
 
 pub fn hf_tables(bw: Bandwidth) -> Vec<RecordTables> {
-    let mut r = VbRnd::stream(TABLE_SEED);
+    hf_tables_with(bw, &mut VbRnd::stream(TABLE_SEED))
+}
+
+/// Build a full set of tables for `bw` from any random source. With the VARA
+/// generator and seed this is the keying used up to VARA HF 4.9.0; with
+/// another source it is a valid keying of the user's own.
+pub fn hf_tables_with(bw: Bandwidth, r: &mut impl Draw) -> Vec<RecordTables> {
     bw.table()
         .iter()
         .map(|l| {
-            let chan = perm(&mut r, l.n());
-            let turbo = perm(&mut r, l.k);
-            let other = if l.is_fsk() { fsk_other(&mut r, l) } else { psk_other(&mut r, l) };
+            let chan = perm(r, l.n());
+            let turbo = perm(r, l.k);
+            let other = if l.is_fsk() { fsk_other(r, l) } else { psk_other(r, l) };
             debug_assert_eq!(other.len() as u32, l.other_len());
             RecordTables { chan, turbo, other }
         })
@@ -159,16 +165,88 @@ fn put_perm(out: &mut Vec<u8>, p: &[u32]) {
     }
 }
 
-fn serialize(tables: &[RecordTables]) -> Vec<u8> {
+/// Order of the two permutations inside each record of a table file.
+///
+/// Files up to VARA HF 4.9.0 store the channel interleaver first. The files
+/// VARA HF 4.9.1 uses from 2027 (`Binary1/2/3.dat`) store the turbo
+/// interleaver first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermOrder {
+    ChanFirst,
+    TurboFirst,
+}
+
+pub(crate) fn serialize_ordered(tables: &[RecordTables], order: PermOrder) -> Vec<u8> {
     let mut out = Vec::new();
     for t in tables {
-        put_perm(&mut out, &t.chan);
-        put_perm(&mut out, &t.turbo);
+        let (a, b) = match order {
+            PermOrder::ChanFirst => (&t.chan, &t.turbo),
+            PermOrder::TurboFirst => (&t.turbo, &t.chan),
+        };
+        put_perm(&mut out, a);
+        put_perm(&mut out, b);
         out.extend(t.other.iter().flat_map(|v| v.to_be_bytes()));
     }
     let crc = crc16_genibus(&out[..out.len() - 1]);
     out.extend(crc.to_be_bytes());
     out
+}
+
+fn serialize(tables: &[RecordTables]) -> Vec<u8> {
+    serialize_ordered(tables, PermOrder::ChanFirst)
+}
+
+fn take_perm(body: &[u8], pos: &mut usize, n: u32, what: &str) -> Result<Vec<u32>, String> {
+    let width = if n > 65536 { 3 } else { 2 };
+    let end = *pos + n as usize * width;
+    let raw = body.get(*pos..end).ok_or_else(|| format!("{what}: file too short"))?;
+    *pos = end;
+    let p: Vec<u32> = raw.chunks_exact(width).map(|c| c.iter().fold(0u32, |a, &b| a << 8 | u32::from(b))).collect();
+    let mut seen = vec![false; n as usize];
+    for &v in &p {
+        match seen.get_mut(v as usize) {
+            Some(s) if !*s => *s = true,
+            _ => return Err(format!("{what}: not a permutation of 0..{n}")),
+        }
+    }
+    Ok(p)
+}
+
+/// Parse a VARA HF table file supplied by the user instead of generating the
+/// tables. The file must have exactly the layout [`hf_dat`] produces (apart
+/// from `order`), a valid checksum, and valid permutations in every record.
+pub fn hf_tables_from_dat(bw: Bandwidth, dat: &[u8], order: PermOrder) -> Result<Vec<RecordTables>, String> {
+    let n = dat.len().checked_sub(2).filter(|&n| n > 0).ok_or("file too short")?;
+    let (body, crc) = dat.split_at(n);
+    if crc16_genibus(&body[..n - 1]).to_be_bytes().as_slice() != crc {
+        return Err("checksum mismatch".into());
+    }
+    let mut pos = 0;
+    let mut out = Vec::new();
+    for (i, l) in bw.table().iter().enumerate() {
+        let what = |s: &str| format!("record {} {s}", i + 1);
+        let (chan, turbo) = match order {
+            PermOrder::ChanFirst => {
+                let chan = take_perm(body, &mut pos, l.n(), &what("chan"))?;
+                let turbo = take_perm(body, &mut pos, l.k, &what("turbo"))?;
+                (chan, turbo)
+            }
+            PermOrder::TurboFirst => {
+                let turbo = take_perm(body, &mut pos, l.k, &what("turbo"))?;
+                let chan = take_perm(body, &mut pos, l.n(), &what("chan"))?;
+                (chan, turbo)
+            }
+        };
+        let end = pos + 2 * l.other_len() as usize;
+        let raw = body.get(pos..end).ok_or_else(|| what("other: file too short"))?;
+        pos = end;
+        let other = raw.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+        out.push(RecordTables { chan, turbo, other });
+    }
+    if pos != body.len() {
+        return Err(format!("{} unexpected trailing bytes", body.len() - pos));
+    }
+    Ok(out)
 }
 
 pub fn hf_dat(bw: Bandwidth) -> Vec<u8> {
@@ -177,4 +255,34 @@ pub fn hf_dat(bw: Bandwidth) -> Vec<u8> {
 
 pub fn fm_dat(bw: FmBandwidth) -> Vec<u8> {
     serialize(&fm_tables(bw))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_round_trips_both_orders() {
+        for bw in Bandwidth::ALL {
+            let t = hf_tables(bw);
+            for order in [PermOrder::ChanFirst, PermOrder::TurboFirst] {
+                let dat = serialize_ordered(&t, order);
+                assert_eq!(hf_tables_from_dat(bw, &dat, order).as_ref(), Ok(&t), "{} {order:?}", bw.hz());
+            }
+            assert_eq!(hf_tables_from_dat(bw, &hf_dat(bw), PermOrder::ChanFirst).as_ref(), Ok(&t));
+        }
+    }
+
+    #[test]
+    fn parse_rejects_bad_files() {
+        let bw = Bandwidth::Hz500;
+        let good = hf_dat(bw);
+        assert!(hf_tables_from_dat(bw, &good, PermOrder::TurboFirst).is_err(), "wrong order");
+        assert!(hf_tables_from_dat(bw, &good[..good.len() - 4], PermOrder::ChanFirst).is_err(), "truncated");
+        assert!(hf_tables_from_dat(bw, &[], PermOrder::ChanFirst).is_err(), "empty");
+        let mut bad = good.clone();
+        bad[0] ^= 1;
+        assert_eq!(hf_tables_from_dat(bw, &bad, PermOrder::ChanFirst), Err("checksum mismatch".into()));
+        assert!(hf_tables_from_dat(Bandwidth::Hz2300, &good, PermOrder::ChanFirst).is_err(), "wrong bandwidth");
+    }
 }

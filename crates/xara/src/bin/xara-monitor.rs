@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xara::audio::{self, Backend};
 use xara::cli::{self, UiArgs, Usage, num};
+use xara::keying;
 use xara::monitor::ui::{Heard, Shared};
 use xara::monitor::{Monitor, MonitorOpts};
 use xara::resample::{Resampler, check_rate};
@@ -44,6 +45,8 @@ struct Args {
     json: bool,
     ui: UiArgs,
     log: Option<PathBuf>,
+    vara_dir: Option<PathBuf>,
+    waveform: keying::Choice,
 }
 
 fn parse() -> Result<Option<Args>, String> {
@@ -52,6 +55,7 @@ fn parse() -> Result<Option<Args>, String> {
     let (mut blind, mut dump, mut verbose, mut key_idle) = (true, false, false, xara::monitor::KEY_IDLE_S);
     let (mut json, mut log) = (false, None);
     let mut ui = UiArgs::default();
+    let (mut vara_dir, mut waveform) = (None, keying::Choice::default());
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
         let mut v = || it.next().ok_or(format!("{k} needs a value"));
@@ -93,6 +97,8 @@ fn parse() -> Result<Option<Args>, String> {
             "--verbose" => verbose = true,
             "--json" => json = true,
             "--log" => log = Some(PathBuf::from(v()?)),
+            "--vara-dir" => vara_dir = Some(PathBuf::from(v()?)),
+            "--waveform" => waveform = v()?.parse()?,
             _ => return Err(format!("unknown option {k}")),
         }
     }
@@ -103,8 +109,9 @@ fn parse() -> Result<Option<Args>, String> {
     if ui.port.is_none() && (ui.addr.is_some() || !ui.hosts.is_empty()) {
         return Err("--ui-addr and --ui-host need --ui-port".into());
     }
+    waveform.check(vara_dir.as_deref())?;
     let mon = MonitorOpts { calls, names, blind, key_idle, dump, verbose };
-    Ok(Some(Args { input, audio, bw, mon, json, ui, log }))
+    Ok(Some(Args { input, audio, bw, mon, json, ui, log, vara_dir, waveform }))
 }
 
 fn utc(t: f64) -> String {
@@ -256,6 +263,8 @@ fn pipe(
 }
 
 fn run(a: Args, stop: &Arc<AtomicBool>) -> std::io::Result<()> {
+    // The keying is fixed for the process and must be chosen before the monitor builds any table.
+    keying::select(a.vara_dir.as_deref(), a.waveform).map_err(io::Error::other)?;
     let m = Monitor::new(a.bw, &a.mon);
     xara::log::line(
         true,

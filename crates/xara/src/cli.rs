@@ -26,7 +26,7 @@ pub fn is_meta(k: &str) -> bool {
 }
 
 const README: &str = include_str!("../README.md");
-const FOOTER: &str = "copyright (c) 2026 x0rro\nreleased under MIT license, see LICENSE\n";
+const FOOTER: &str = "XaraNext, based on xara\ncopyright (c) 2026 x0rro\nreleased under MIT license, see LICENSE\n";
 
 pub struct Usage {
     pub name: &'static str,

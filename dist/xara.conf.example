@@ -79,6 +79,19 @@
 #ptt = dtr:/dev/serial/by-id/usb-XXXX-if00
 
 ###
+# HF waveform keying (optional, experimental)
+
+# VARA HF 4.9.1 uses a new waveform once its clock reaches 2027. xara does not
+# ship the tables for it: install VARA HF 4.9.1 yourself and point at it here.
+#vara-dir = /path/to/VARA
+
+# or point at a named keying made with: xara-keygen --name NAME --out DIR
+#vara-dir = /etc/xara/keying-NAME
+
+# auto (default): old waveform until 2027, new from 2027. legacy or 2027 force it.
+#waveform = auto
+
+###
 # web UI
 
 # xara logs http://...:8080/?token=... at startup, click it!

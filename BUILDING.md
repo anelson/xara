@@ -2,7 +2,7 @@
 
 the standard build command is this:
 
-    cargo install --locked --git https://github.com/x0rro/xara xara
+    cargo install --locked --git https://github.com/CowboyPilot/xara xara
 
 the rest of the doc covers platform-specific deps and setup quirks.
 

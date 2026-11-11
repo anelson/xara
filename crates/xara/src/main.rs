@@ -7,6 +7,7 @@ use xara::audio::ratematch::{self, TxBuffer};
 use xara::audio::txpath::TxPath;
 use xara::audio::{self, Audio, Backend, Behind};
 use xara::cli::{self, UiArgs, Usage, num};
+use xara::keying;
 use xara::ptt::{PttCtl, PttSpec, PttTiming};
 use xara::record::{self, Recorder};
 use xara::say;
@@ -66,6 +67,8 @@ struct Args {
     log: Option<PathBuf>,
     hf_given: bool,
     list_devices: bool,
+    vara_dir: Option<PathBuf>,
+    waveform: keying::Choice,
 }
 
 fn finite(k: &str, v: &str) -> Result<f64, String> {
@@ -103,6 +106,8 @@ fn defaults() -> Args {
         log: None,
         hf_given: false,
         list_devices: false,
+        vara_dir: None,
+        waveform: keying::Choice::default(),
     }
 }
 
@@ -163,6 +168,8 @@ fn take(a: &mut Args, k: &str, mut v: impl FnMut() -> Result<String, String>) ->
         "--record" => a.record = Some(PathBuf::from(v()?)),
         "--log" => a.log = Some(PathBuf::from(v()?)),
         "--list-devices" => a.list_devices = true,
+        "--vara-dir" => a.vara_dir = Some(PathBuf::from(v()?)),
+        "--waveform" => a.waveform = v()?.parse()?,
         #[cfg(feature = "registered")]
         "--registered" => a.registered = true,
         #[cfg(not(feature = "registered"))]
@@ -232,6 +239,7 @@ fn check(a: &Args) -> Result<(), String> {
     if a.tx_buffer_ms.is_some_and(|n| !(ratematch::MIN_MS..=ratematch::MAX_MS).contains(&n)) {
         return Err(format!("--tx-buffer-ms must be {}..{}", ratematch::MIN_MS, ratematch::MAX_MS));
     }
+    a.waveform.check(a.vara_dir.as_deref())?;
     match (a.radio, &a.ptt) {
         (false, Some(_)) => return Err("--ptt needs --radio".into()),
         (true, None) => return Err("--radio needs --ptt (use --ptt vox for VOX)".into()),
@@ -774,6 +782,9 @@ fn real_main() -> Result<ExitCode, String> {
         say!("settings in {}", d.join(settings::FILE).display());
     }
     a.ui_token = ui_token(&a, dir.as_deref(), inherited).map_err(|e| format!("UI token: {e}"))?;
+    if a.fm.is_none() {
+        keying::select(a.vara_dir.as_deref(), a.waveform)?;
+    }
     let (backend, check) = (a.audio, argv.clone());
     let settings = Arc::new(Settings::new(Init {
         dir: dir.clone(),
@@ -950,6 +961,18 @@ mod tests {
         let p = conf("conf-tx-buffer", "tx-buffer-ms = 60\n");
         assert_eq!(config_args(&p).unwrap(), argv("--tx-buffer-ms 60"));
         std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn waveform_options() {
+        let base = "--call N2CALL --capture c --playback p";
+        let a = parse(&argv(base)).unwrap().unwrap();
+        assert_eq!((a.waveform, a.vara_dir.as_deref()), (keying::Choice::Auto, None));
+        let a = parse(&argv(&format!("{base} --vara-dir /opt/vara --waveform 2027"))).unwrap().unwrap();
+        assert_eq!((a.waveform, a.vara_dir.as_deref()), (keying::Choice::Y2027, Some(Path::new("/opt/vara"))));
+        assert!(parse(&argv(&format!("{base} --waveform 2027"))).is_err(), "2027 needs the tables");
+        assert!(parse(&argv(&format!("{base} --waveform 2026"))).is_err());
+        assert!(parse(&argv(&format!("{base} --waveform legacy"))).is_ok());
     }
 
     #[test]

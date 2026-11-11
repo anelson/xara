@@ -101,9 +101,63 @@ impl VbRnd {
     }
 }
 
+/// A source of uniform integers for the table generators.
+pub trait Draw {
+    /// A value in `0..m`.
+    fn draw(&mut self, m: u32) -> u32;
+}
+
+impl Draw for VbRnd {
+    fn draw(&mut self, m: u32) -> u32 {
+        VbRnd::draw(self, m)
+    }
+}
+
+/// SplitMix64, used only to generate user-defined keyings. It is not part of
+/// any VARA waveform. The algorithm is fixed: a published keying name must
+/// produce the same tables in every version of xara.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SplitMix64(u64);
+
+impl SplitMix64 {
+    pub const fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+}
+
+impl Draw for SplitMix64 {
+    fn draw(&mut self, m: u32) -> u32 {
+        ((u128::from(self.next_u64()) * u128::from(m)) >> 64) as u32
+    }
+}
+
+/// FNV-1a, 64 bit: turns a keying name into a generator seed.
+pub fn fnv1a64(data: &[u8]) -> u64 {
+    data.iter().fold(0xCBF2_9CE4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splitmix_and_fnv_reference_values() {
+        let mut r = SplitMix64::new(0);
+        assert_eq!(r.next_u64(), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(r.next_u64(), 0x6E78_9E6A_A1B9_65F4);
+        assert_eq!(fnv1a64(b""), 0xCBF2_9CE4_8422_2325);
+        assert_eq!(fnv1a64(b"a"), 0xAF63_DC4C_8601_EC8C);
+        let mut r = SplitMix64::new(7);
+        assert!((0..1000).all(|_| Draw::draw(&mut r, 13) < 13));
+    }
 
     #[test]
     fn spec_examples() {

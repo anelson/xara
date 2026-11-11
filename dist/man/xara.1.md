@@ -167,6 +167,19 @@ along with KISS for applications such as Pat. See the README for full details.
 **--registered**
 :   Enable registered speeds (must set build flag)
 
+**--vara-dir** *DIR*
+
+:   Directory of your own VARA HF 4.9.1 installation. xara reads the tables
+    for the 2027 waveform (Binary1.dat, Binary2.dat, Binary3.dat, Mod1.dat,
+    Mod2.dat) from it; they are not shipped with xara. HF only. Experimental.
+
+**--waveform** *auto*|*legacy*|*2027*
+
+:   HF waveform keying. *auto* (default) uses the old waveform until 2027 and
+    the new one from 2027 if **--vara-dir** is set, as VARA HF 4.9.1 does.
+    *2027* needs **--vara-dir**. A named keying made by **xara-keygen**(1) is
+    used whatever the date, unless *legacy* is given.
+
 **-h**, **--help**, **-V**, **--version**
 
 :   Print the usage or the version and exit.
@@ -256,4 +269,4 @@ If you kill with SIGKILL, PTT may not be released!
 
 **xara-monitor**(1), **rigctld**(1), **pactl**(1), **aplay**(1)
 
-README.md in the xara source, https://github.com/x0rro/xara
+README.md and docs/keying.md in the XaraNext source

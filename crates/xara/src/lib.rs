@@ -8,6 +8,7 @@ pub mod flac;
 #[cfg(target_os = "macos")]
 mod hid;
 mod hidraw;
+pub mod keying;
 pub mod monitor;
 pub mod ptt;
 pub mod record;
