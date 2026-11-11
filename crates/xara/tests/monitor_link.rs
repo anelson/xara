@@ -25,6 +25,7 @@ struct Air {
 
 impl Air {
     fn new(bw: Bandwidth, comp: Compression, noise: f64) -> Self {
+        common::keying_from_env();
         let cfg = |call: &str, seed| {
             let mut c = Config { seed, ..Config::new(bw, call) };
             (c.host.registered, c.host.compression) = (true, comp);

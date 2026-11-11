@@ -18,6 +18,7 @@ struct Lead {
 type Air = air::Air<Station, 2>;
 
 fn pair(bw: Bandwidth, registered: bool, noise: f64, lead: Lead) -> Air {
+    common::keying_from_env();
     let cfg = |call: &str, seed| {
         let mut c = Config { seed, ..Config::new(bw, call) };
         c.host.registered = registered;
@@ -174,6 +175,7 @@ fn capture_lag_is_absorbed() {
 
 #[test]
 fn ssid_calls_link_over_audio() {
+    common::keying_from_env();
     let cfg = |call: &str, seed| Config { seed, ..Config::new(Bandwidth::Hz500, call) };
     let mut air = Air::pair(
         [Station::new(cfg("N0CALL-1", 3), Options::default()), Station::new(cfg("N1CALL-T", 5), Options::default())],

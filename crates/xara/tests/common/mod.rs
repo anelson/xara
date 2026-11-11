@@ -348,3 +348,21 @@ impl Seen {
         self.ctrl.iter().any(|&(s, c)| sender.is_none_or(|r| r == s) && codes.contains(&c))
     }
 }
+
+/// Put this test process on another HF keying when asked to, so the link
+/// tests can be re-run under it: `XARA_VARA_DIR` (a VARA HF 4.9.1 install)
+/// or `XARA_KEYING_NAME` (a named keying, generated on the spot). Call it
+/// before building any station or monitor. Without either variable it does
+/// nothing. See docs/keying.md.
+pub fn keying_from_env() {
+    use xara_phy::hf::{Keying, install_keying};
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let k = match (std::env::var_os("XARA_VARA_DIR"), std::env::var("XARA_KEYING_NAME")) {
+            (Some(dir), _) => Keying::load(std::path::Path::new(&dir)).expect("load keying"),
+            (None, Ok(name)) => Keying::generate(&name),
+            (None, Err(_)) => return,
+        };
+        install_keying(k).expect("install keying");
+    });
+}

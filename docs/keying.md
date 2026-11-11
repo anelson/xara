@@ -148,5 +148,9 @@ changes meaning.
     XARA_VARA_DIR=/path/to/VARA cargo test -p xara-phy --test keying_2027
 
 The second and third run an audio loopback at every level under a named
-keying and under your own VARA HF 4.9.1 files. Without those variables the
+keying and under your own VARA HF 4.9.1 files. The same two variables also
+put the full two-station and monitor tests on that keying:
+
+    XARA_KEYING_NAME=NET-7 cargo test -p xara --test audio_link --test monitor_link
+ Without those variables the
 keying tests are skipped; no VARA file is needed to build or test xara.
