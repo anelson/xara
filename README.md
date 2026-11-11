@@ -94,7 +94,7 @@ container on x86_64:
     --kiss-port N|off       KISS TCP port (default: 8100)
     --persistence P         KISS p-persistence
 
-    --registered            enable registered speeds (must set build flag)
+    --registered            enable registered speeds
 
     --vara-dir DIR          your VARA HF 4.9.1 install, for the 2027 waveform
     --waveform W            auto, legacy or 2027 (default: auto)
@@ -223,8 +223,12 @@ options:
 
 ## registered mode
 
-compile with the `registered` feature for higher speeds if you have a
-registered copy of VARA, then run with `xara --registered ...`.
+run with `xara --registered ...` for higher speeds if you have a registered
+copy of VARA. it is off unless you give the flag.
+
+the `registered` feature is part of the default build. to leave it out,
+build with `--no-default-features` and name the features you want, e.g.
+`--features pulse,alsa`.
 
 ## copyright
 

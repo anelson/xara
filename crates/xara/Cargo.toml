@@ -23,7 +23,7 @@ alsa-sys = { workspace = true, optional = true }
 xara-testkit.workspace = true
 
 [features]
-default = ["pulse", "alsa"]
+default = ["pulse", "alsa", "registered"]
 pulse = []
 alsa = ["dep:alsa-sys"]
 registered = []
