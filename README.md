@@ -15,10 +15,10 @@ to transmit, add `--radio` and `--ptt` flags.
 
 ## other features
 
- - web UI for configuration and management
- - all the usual TCP ports (works with your favorite software)
- - digipeating (enable by call with `--digi N1CALL`)
- - `xara-monitor`: passive VARA HF monitor (with web UI)
+- web UI for configuration and management
+- all the usual TCP ports (works with your favorite software)
+- digipeating (enable by call with `--digi N1CALL`)
+- `xara-monitor`: passive VARA HF monitor (with web UI)
 
 ## building
 
@@ -36,6 +36,16 @@ alternatively for a local setup you can do:
     cargo test
 
 the systemd, udev and sysusers files and `dist/install.sh` are linux-only.
+
+## installing with emcomm tools
+
+If you're using a version of EmComm Tools that includes Xara support (R7 at the time of this writing), you don't need to
+build or install Xara manually. Instead, download [the latest source code
+release](https://github.com/anelson/xara/releases/download/v0.1.3/xara-0.1.3.tar.gz) and save it to a file called
+`xara-0.1.3.tar.gz`, and follow the instructions in the [EmComm Tools xara source package
+requirements](https://github.com/thetechprepper/emcomm-tools-os-community/blob/release/r7/scripts/xara.md). In most
+cases, it should be enough to place the `xara-0.1.3.tar.gz` archive in `emcomm-tools-os-community/scripts/`, then
+proceed as normal with the EmComm Tools process.
 
 ### reproducing a release
 
@@ -98,16 +108,16 @@ container on x86_64:
 
 we support the following PTT methods:
 
- - rts and dtr on a serial port
- - cm108/cm119 HID GPIO
- - hamlib rigctld CAT
- - vox (not recommended)
+- rts and dtr on a serial port
+- cm108/cm119 HID GPIO
+- hamlib rigctld CAT
+- vox (not recommended)
 
 you can adjust the following PTT settings as well:
 
- - PTT lead time
- - PTT tail time
- - max PTT
+- PTT lead time
+- PTT tail time
+- max PTT
 
 summary of settings:
 
