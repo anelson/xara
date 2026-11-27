@@ -9,6 +9,13 @@ use xara_host::server::Host;
 use xara_phy::hf::level::Bandwidth;
 use xara_testkit::net::turned_away;
 
+const LEGACY_VERSION: &str = "VERSION VARA HF v4.9.0";
+const EXPECTED_VERSION: &str = if cfg!(feature = "varac-17") { "VERSION VARA HF v4.9.3" } else { LEGACY_VERSION };
+
+fn expected_reply(reply: &str) -> &str {
+    if reply == LEGACY_VERSION { EXPECTED_VERSION } else { reply }
+}
+
 fn solo() -> (Lab, Client) {
     let mut lab = Lab::new(1);
     let mut c = lab.attach(0);
@@ -22,7 +29,8 @@ fn idle_cases() -> Vec<(Vec<u8>, Vec<String>)> {
     for v in vector("host/commands.json")["vectors"].as_array().unwrap() {
         if v["state"] == "idle" {
             let line = format!("{}\r", v["line"].as_str().unwrap()).into_bytes();
-            cases.push((line, v["expect"].as_array().unwrap().iter().map(|e| e.as_str().unwrap().into()).collect()));
+            let replies = v["expect"].as_array().unwrap().iter().map(|e| expected_reply(e.as_str().unwrap()).into());
+            cases.push((line, replies.collect()));
         }
     }
     for t in vector("host/command_replies.json")["table"].as_array().unwrap() {
@@ -32,7 +40,7 @@ fn idle_cases() -> Vec<(Vec<u8>, Vec<String>)> {
             continue;
         }
         let want = r[0].as_str().unwrap();
-        cases.push((sent, want.split(" | ").map(String::from).collect()));
+        cases.push((sent, want.split(" | ").map(expected_reply).map(String::from).collect()));
     }
     cases
 }
@@ -52,9 +60,9 @@ fn idle_replies_match_vectors() {
 fn command_line_framing() {
     let (mut lab, mut c) = solo();
     assert!(ask(&mut lab, &mut c, b"VERSION\n", 1).is_empty());
-    assert_eq!(ask(&mut lab, &mut c, b"\r", 1), ["VERSION VARA HF v4.9.0"]);
+    assert_eq!(ask(&mut lab, &mut c, b"\r", 1), [EXPECTED_VERSION]);
     assert_eq!(ask(&mut lab, &mut c, b"\r", 1), ["WRONG"]);
-    assert_eq!(ask(&mut lab, &mut c, b"VERSION\r\n", 1), ["VERSION VARA HF v4.9.0"]);
+    assert_eq!(ask(&mut lab, &mut c, b"VERSION\r\n", 1), [EXPECTED_VERSION]);
     assert_eq!(ask(&mut lab, &mut c, b"LISTEN ON\nVERSION\r", 1), ["WRONG"]);
     assert_eq!(ask(&mut lab, &mut c, b"CLEANTXBUFFER\r", 1), ["CLEANTXBUFFER BUFFEREMPTY"]);
     c.write(b"hello");
@@ -119,7 +127,8 @@ fn linked_replies_and_deferred_mycall() {
         if v["state"] != "linked" || last.contains(&line) {
             continue;
         }
-        let want: Vec<String> = v["expect"].as_array().unwrap().iter().map(|e| e.as_str().unwrap().into()).collect();
+        let want: Vec<_> =
+            v["expect"].as_array().unwrap().iter().map(|e| expected_reply(e.as_str().unwrap())).collect();
         let got = ask(&mut lab, &mut a, format!("{line}\r").as_bytes(), want.len());
         assert_eq!(got, want, "{line}");
         assert_ne!(lab.tnc[0].station().state(), State::Listen, "{line}");
@@ -279,7 +288,7 @@ fn one_client_per_port_and_drop_resets() {
     for addr in [lab.tnc[0].host().cmd_addr, lab.tnc[0].host().data_addr] {
         assert!(turned_away(addr));
     }
-    assert_eq!(ask(&mut lab, &mut a, b"VERSION\r", 1), ["VERSION VARA HF v4.9.0"]);
+    assert_eq!(ask(&mut lab, &mut a, b"VERSION\r", 1), [EXPECTED_VERSION]);
 
     b.write(b"queued before the link");
     link(&mut lab, &mut a, &mut b);

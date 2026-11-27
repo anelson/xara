@@ -348,7 +348,8 @@ impl TxFront for Station {
 impl Modem for Station {
     type Config = Config;
     type Session = Session;
-    const VERSION: &'static str = "VERSION VARA HF v4.9.0";
+    const VERSION: &'static str =
+        if cfg!(feature = "varac-17") { "VERSION VARA HF v4.9.3" } else { "VERSION VARA HF v4.9.0" };
     const VIAS: bool = false;
     const KISS_RX_FOLLOWS_CLIENTS: bool = true;
     const CWID_GATEWAY: bool = true;
